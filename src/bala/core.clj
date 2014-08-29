@@ -7,66 +7,69 @@
 (def ^:dynamic props nil)
 
 (defn prox
-  [server qbytes qlen]
-  (let [sbuf (java.io.ByteArrayOutputStream. buffer-size)]
-    (try
-      (let [sock (java.net.Socket. (-> server :name) (-> server :port))
-	    in (java.io.InputStreamReader. (-> sock .getInputStream))
-	    out (-> sock .getOutputStream)]
-	(-> out (.write qbytes 0 qlen))
-	(let [first-byte (.read in)]
-	  (when (not= -1 first-byte)
-	    (do
-	      (-> sbuf (.write first-byte))
-	      (while (.ready in)
-		(.write sbuf (.read in)))))
-	  sbuf))
-      (catch java.net.ConnectException e sbuf))))
+  [server qbuf]
+  (try
+    (let [sock (java.net.Socket. (-> server :name) (-> server :port))
+          in (-> sock .getInputStream)
+          out (-> sock .getOutputStream)]
+      (.writeTo qbuf out)
+      (let [first-byte (.read in)
+            leftover (.available in)
+            ba (byte-array leftover)
+            sbuf (java.io.ByteArrayOutputStream. (inc leftover))]
+        (when (not= -1 first-byte)
+          (do
+            (-> sbuf (.write first-byte))
+            (-> in (.read ba 0 (.available in)))
+            (-> sbuf (.write ba 0 leftover))))
+        sbuf))
+    (catch java.net.ConnectException e
+      (println (format "%s:%d: %s" (-> server :name) (-> server :port) (.getMessage e)))
+      (java.io.ByteArrayOutputStream. 0))))
 
 (defn intercept
   [qbuf]
-  (let [bufsize (.size qbuf)
-        q (.toByteArray qbuf)
-        responses (pmap
-                    #(prox % q bufsize)
+  (let [responses (pmap
+                    #(prox % qbuf)
                     (-> props :servers))
-        primary-response (first responses)]
+        primary (first
+                  (filter
+                    #(= (:primary (second %)) true)
+                    (map-indexed vector (-> props :servers))))]
 
-    (println (apply str (map #(format "%02x:" %) q)))
-    (println (map #(char (bit-and % 255)) q))
-
-    (println (first responses) (str (first responses)))
-
-    primary-response))
+    (if primary
+      (nth responses (first primary))
+      (first responses))))
 
 (defn handle-connection
   [conn]
-  (let [qbuf (java.io.ByteArrayOutputStream. buffer-size)]
-    (loop []
-      (let [first-byte (-> (:in @conn) .read)]
-	(if (not= -1 first-byte)
-	  (do
-	    (-> qbuf (.write first-byte))
-	    (while (.ready (:in @conn))
-	      (-> qbuf (.write (-> (:in @conn) .read))))
+  (loop []
+    (let [first-byte (-> (:in @conn) .read)]
+      (if (not= -1 first-byte)
+        (let [leftover (.available (:in @conn))
+              ba (byte-array leftover)
+              qbuf (java.io.ByteArrayOutputStream. (inc leftover))]
+          (-> qbuf (.write first-byte))
+          (-> (:in @conn) (.read ba 0 (.available (:in @conn))))
 
-	    (let [sbuf (intercept qbuf)
-                  slen (.size sbuf)
-		  s (.toByteArray sbuf)]
-	      (-> (:out @conn) (.write s 0 slen)))
+          (-> qbuf (.write ba 0 leftover))
 
-	    (-> qbuf .reset)
-	    (recur))
-	  (println "connection closed"))))))
+          (let [sbuf (intercept qbuf)
+                slen (.size sbuf)
+                s (.toByteArray sbuf)]
+            (-> (:out @conn) (.write s 0 slen)))
+
+          (-> qbuf .reset)
+          (recur))
+        (println "connection closed")))))
 
 (defn handle-thread
   [in out]
-  (let [in (java.io.InputStreamReader. in)
-        conn (ref {:in in :out out})]
+  (let [conn (ref {:in in :out out})]
     (handle-connection conn)))
 
 (defn -main
   [properties-file & _]
   (alter-var-root #'props
                   (fn [_] (yaml/parse-string (slurp properties-file))))
-  (ss/create-server (-> props :proxy-server :port) handle-thread))
+  (ss/create-server (-> props :proxy-port) handle-thread))
