@@ -1,0 +1,8 @@
+proxy-port: 8031
+
+servers:
+ - name: localhost
+   port: 27017
+   timeout: 4000
+
+server-timeout: 5000
