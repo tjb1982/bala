@@ -1,6 +1,7 @@
 (ns bala.core
   (:require [server.socket :as ss]
             [clj-yaml.core :as yaml])
+;  (:use bala-mongo.core)
   (:gen-class))
 
 (def buffer-size 8192)
@@ -40,6 +41,11 @@
                   (filter
                     #(= (:primary (second %)) true)
                     (map-indexed vector (-> props :servers))))]
+    
+    (when (-> props :response-handlers)
+      (doseq [handler (-> props :response-handlers)]
+        (use (symbol handler))
+        (apply (symbol "handle-responses") responses)))
 
     (if primary
       (nth responses (first primary))
@@ -59,9 +65,8 @@
           (-> qbuf (.write ba 0 leftover))
 
           (let [sbuf (intercept qbuf)]
-	    (.writeTo sbuf (:out @conn)))
+            (.writeTo sbuf (:out @conn)))
 
-          (-> qbuf .reset)
           (recur))
         (println "connection closed")))))
 

@@ -1,5 +1,8 @@
 proxy-port: 8031
 
+response-handlers:
+ - bala-mongo.core
+
 servers:
  - name: localhost
    port: 27017

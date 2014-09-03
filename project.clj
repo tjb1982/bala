@@ -7,6 +7,7 @@
 		[org.clojure/clojure "1.6.0"]
 		[server-socket/server-socket "1.0.0"]
                 [clj-yaml "0.4.0"]
+		[bala-mongo "0.1.1-SNAPSHOT"]
 		]
   :main ^:skip-aot bala.core
   :target-path "target/%s"
