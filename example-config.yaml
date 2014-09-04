@@ -1,11 +1,26 @@
 proxy-port: 8031
 
-response-handlers:
+message-handlers:
  - bala-mongo.core
 
+client-drivers:
+ - name: python client
+   main: /home/tom/nclk/bala-mongo-python-driver.py
+ - name: java driver
+   main: java -jar /home/tom/nclk/bala-mongo-java-driver.jar
+
 servers:
- - name: localhost
-   port: 27017
-   timeout: 4000
+
+ - name: mongo v2.6
+   host: localhost
+   port: 8041
+   primary: true
+
+ - name: doclayer
+   host: localhost
+   port: 8042
+
+
 
 server-timeout: 5000
+

@@ -1,7 +1,6 @@
 (ns bala.core
   (:require [server.socket :as ss]
             [clj-yaml.core :as yaml])
-;  (:use bala-mongo.core)
   (:gen-class))
 
 (def buffer-size 8192)
@@ -9,28 +8,31 @@
 
 (defn prox
   [server qbuf]
-  (try
-    (let [sock (java.net.Socket. (-> server :name) (-> server :port))
-          in (-> sock .getInputStream)
-          out (-> sock .getOutputStream)]
-      (.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
-      (.writeTo qbuf out)
-      (let [first-byte (.read in)]
-        (if (not= -1 first-byte)
-          (let [leftover (.available in)
-                ba (byte-array leftover)
-                sbuf (java.io.ByteArrayOutputStream. (inc leftover))]
-            (-> sbuf (.write first-byte))
-            (-> in (.read ba 0 (.available in)))
-            (-> sbuf (.write ba 0 leftover))
+  (let [buf
+    (try
+      (let [sock (java.net.Socket. (-> server :host) (-> server :port))
+	    in (-> sock .getInputStream)
+	    out (-> sock .getOutputStream)]
+	(.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
+	(.writeTo qbuf out)
+	(let [first-byte (.read in)]
+          (Thread/sleep 100)
+	  (if (not= -1 first-byte)
+	    (let [leftover (.available in)
+		  ba (byte-array leftover)
+		  sbuf (java.io.ByteArrayOutputStream. (inc leftover))]
+	      (-> sbuf (.write first-byte))
+	      (-> in (.read ba 0 leftover))
+	      (-> sbuf (.write ba 0 leftover))
 	    sbuf)
-	  (java.io.ByteArrayOutputStream. 0))))
-    (catch java.net.SocketTimeoutException e
-      (println (format "%s:%d: %s" (-> server :name) (-> server :port) (.getMessage e)))
-      (java.io.ByteArrayOutputStream. 0))
-    (catch java.net.ConnectException e
-      (println (format "%s:%d: %s" (-> server :name) (-> server :port) (.getMessage e)))
-      (java.io.ByteArrayOutputStream. 0))))
+	    (java.io.ByteArrayOutputStream. 0))))
+      (catch java.net.SocketTimeoutException e
+	(println (format "%s:%d: %s" (-> server :host) (-> server :port) (.getMessage e)))
+	(java.io.ByteArrayOutputStream. 0))
+      (catch java.net.ConnectException e
+	(println (format "%s:%d: %s" (-> server :host) (-> server :port) (.getMessage e)))
+	(java.io.ByteArrayOutputStream. 0)))]
+    [buf server]))
 
 (defn intercept
   [qbuf]
@@ -41,15 +43,17 @@
                   (filter
                     #(= (:primary (second %)) true)
                     (map-indexed vector (-> props :servers))))]
-    
-    (when (-> props :response-handlers)
-      (doseq [handler (-> props :response-handlers)]
-        (use (symbol handler))
-        (apply (symbol "handle-responses") responses)))
 
+    (doseq [handler (-> props :message-handlers)]
+      (require (symbol handler))
+      (let [pkg {:responses responses
+                 :request qbuf
+                 :props props}]
+        ((resolve (symbol (str handler "/handle-messages"))) pkg)))
+    
     (if primary
-      (nth responses (first primary))
-      (first responses))))
+      (first (nth responses (first primary)))
+      (ffirst responses))))
 
 (defn handle-connection
   [conn]
@@ -73,6 +77,9 @@
 (defn handle-thread
   [in out]
   (let [conn (ref {:in in :out out})]
+    (when-let [handler (-> props :pre-connection-handler)]
+      (require (symbol handler))
+      ((resolve (symbol (str handler "/pre-connection"))) props))
     (handle-connection conn)))
 
 (defn -main
