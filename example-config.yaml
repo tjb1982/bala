@@ -1,7 +1,6 @@
 proxy-port: 8031
 
-message-handlers:
- - bala-mongo.core
+connector: bala-mongo.core
 
 client-drivers:
  - name: python client

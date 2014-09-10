@@ -8,31 +8,28 @@
 
 (defn prox
   [server qbuf]
-  (let [buf
+  (let [sbuf
     (try
       (let [sock (java.net.Socket. (-> server :host) (-> server :port))
 	    in (-> sock .getInputStream)
 	    out (-> sock .getOutputStream)]
 	(.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
 	(.writeTo qbuf out)
-	(let [first-byte (.read in)]
-          (Thread/sleep 100)
-	  (if (not= -1 first-byte)
-	    (let [leftover (.available in)
-		  ba (byte-array leftover)
-		  sbuf (java.io.ByteArrayOutputStream. (inc leftover))]
-	      (-> sbuf (.write first-byte))
-	      (-> in (.read ba 0 leftover))
-	      (-> sbuf (.write ba 0 leftover))
-	    sbuf)
+          
+        (let [ba (-> in ((resolve (symbol (str (-> props :connector) "/read-response")))))]
+          (if (not= -1 ba)
+            (let [sbuf (java.io.ByteArrayOutputStream. (count ba))]
+              (-> sbuf (.write ba 0 (count ba)))
+	      sbuf)
 	    (java.io.ByteArrayOutputStream. 0))))
+          
       (catch java.net.SocketTimeoutException e
 	(println (format "%s:%d: %s" (-> server :host) (-> server :port) (.getMessage e)))
 	(java.io.ByteArrayOutputStream. 0))
       (catch java.net.ConnectException e
 	(println (format "%s:%d: %s" (-> server :host) (-> server :port) (.getMessage e)))
 	(java.io.ByteArrayOutputStream. 0)))]
-    [buf server]))
+    {:buffer sbuf :server server}))
 
 (defn intercept
   [qbuf]
@@ -44,50 +41,41 @@
                     #(= (:primary (second %)) true)
                     (map-indexed vector (-> props :servers))))]
 
-    (doseq [handler (-> props :message-handlers)]
-      (require (symbol handler))
+    (let [connector (-> props :connector)]
       (let [pkg {:responses responses
                  :request qbuf
                  :props props}]
-        ((resolve (symbol (str handler "/handle-messages"))) pkg)))
+        ((resolve (symbol (str connector "/handle-interchange"))) pkg)))
     
     (if primary
-      (first (nth responses (first primary)))
-      (ffirst responses))))
+      (:buffer (nth responses (first primary)))
+      (:buffer (first responses)))))
 
 (defn handle-connection
   [conn]
   (loop []
-    (let [first-byte (-> (:in @conn) .read)]
-      (if (not= -1 first-byte)
-        (let [leftover (.available (:in @conn))
-              ba (byte-array leftover)
-              qbuf (java.io.ByteArrayOutputStream. (inc leftover))]
-
-          (-> qbuf (.write first-byte))
-          (-> (:in @conn) (.read ba 0 (.available (:in @conn))))
-          (-> qbuf (.write ba 0 leftover))
-
-          (let [sbuf (intercept qbuf)]
+    (let [ba ((resolve (symbol (str (-> props :connector) "/read-request")))
+               (:in @conn))]
+      (if (not= -1 ba)
+        (let [qbuf (java.io.ByteArrayOutputStream. (count ba))]
+          (-> qbuf (.write ba 0 (count ba)))
+          (let [sbuf (-> qbuf intercept)]
             (.writeTo sbuf (:out @conn)))
-
           (recur))
         (println "connection closed")))))
 
 (defn handle-thread
   [in out]
   (let [conn (ref {:in in :out out})]
-    (when-let [handler (-> props :pre-connection-handler)]
-      (require (symbol handler))
-      ((resolve (symbol (str handler "/pre-connection"))) props))
     (handle-connection conn)))
 
 (defn -main
-  [& [properties-file _]]
+  [& [properties-file]]
   (if properties-file
     (do
       (alter-var-root #'props
                       (fn [_] (yaml/parse-string (slurp properties-file))))
+      (require (symbol (-> props :connector)))
       (ss/create-server (-> props :proxy-port) handle-thread))
     (println "usage: [main] /path/to/config/file")))
 
