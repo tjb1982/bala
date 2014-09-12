@@ -6,6 +6,10 @@
 (def buffer-size 8192)
 (def ^:dynamic props nil)
 
+(defn connector-fn
+  [fn-name]
+  (resolve (symbol (str (-> props :connector) fn-name))))
+
 (defn prox
   [server qbuf]
   (let [sbuf
@@ -15,8 +19,11 @@
 	    out (-> sock .getOutputStream)]
 	(.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
 	(.writeTo qbuf out)
-          
-        (let [ba (-> in ((resolve (symbol (str (-> props :connector) "/read-response")))))]
+ 
+        (let [ba (-> in ((resolve
+                           (symbol
+                             (str (-> props :connector)
+                                  "/read-response")))))]
           (if (not= -1 ba)
             (let [sbuf (java.io.ByteArrayOutputStream. (count ba))]
               (-> sbuf (.write ba 0 (count ba)))
@@ -24,10 +31,16 @@
 	    (java.io.ByteArrayOutputStream. 0))))
           
       (catch java.net.SocketTimeoutException e
-	(println (format "%s:%d: %s" (-> server :host) (-> server :port) (.getMessage e)))
+	(println (format "%s:%d: %s"
+	                 (-> server :host)
+                         (-> server :port)
+                         (.getMessage e)))
 	(java.io.ByteArrayOutputStream. 0))
       (catch java.net.ConnectException e
-	(println (format "%s:%d: %s" (-> server :host) (-> server :port) (.getMessage e)))
+	(println (format "%s:%d: %s"
+                         (-> server :host)
+                         (-> server :port)
+                         (.getMessage e)))
 	(java.io.ByteArrayOutputStream. 0)))]
     {:buffer sbuf :server server}))
 
@@ -66,8 +79,12 @@
 
 (defn handle-thread
   [in out]
+  (when-let [pre-fn (connector-fn "/before-connection")]
+    (pre-fn props))
   (let [conn (ref {:in in :out out})]
-    (handle-connection conn)))
+    (handle-connection conn))
+  (when-let [post-fn (connector-fn "/after-connection")]
+    (post-fn props)))
 
 (defn -main
   [& [properties-file]]
@@ -76,6 +93,8 @@
       (alter-var-root #'props
                       (fn [_] (yaml/parse-string (slurp properties-file))))
       (require (symbol (-> props :connector)))
+      (when-let [pre-server-fn (connector-fn "/before-create-server")]
+        (pre-server-fn props))
       (ss/create-server (-> props :proxy-port) handle-thread))
     (println "usage: [main] /path/to/config/file")))
 
