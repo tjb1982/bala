@@ -6,12 +6,12 @@ servers:
 
  - name: mongo v2.6
    host: localhost
-   port: 8041
+   port: 27017
    primary: true
 
  - name: doclayer
    host: localhost
-   port: 8042
+   port: 8041
 
 server-timeout: 5000
 
