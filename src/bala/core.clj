@@ -12,68 +12,67 @@
 
 (defn prox
   [server qbuf]
-  (let [sbuf
-    (try
-      (let [sock (java.net.Socket. (-> server :host) (-> server :port))
-	    in (-> sock .getInputStream)
-	    out (-> sock .getOutputStream)]
-	(.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
-	(.writeTo qbuf out)
- 
-        (let [ba (-> in ((resolve
-                           (symbol
-                             (str (-> props :connector)
-                                  "/read-response")))))]
-          (if (not= -1 ba)
-            (let [sbuf (java.io.ByteArrayOutputStream. (count ba))]
-              (-> sbuf (.write ba 0 (count ba)))
-	      sbuf)
-	    (java.io.ByteArrayOutputStream. 0))))
-          
-      (catch java.net.SocketTimeoutException e
-	(println (format "%s:%d: %s"
-	                 (-> server :host)
-                         (-> server :port)
-                         (.getMessage e)))
-	(java.io.ByteArrayOutputStream. 0))
-      (catch java.net.ConnectException e
-	(println (format "%s:%d: %s"
-                         (-> server :host)
-                         (-> server :port)
-                         (.getMessage e)))
-	(java.io.ByteArrayOutputStream. 0)))]
-    {:buffer sbuf :server server}))
+  (let [expect-response? (if-let [exp-fn (connector-fn "/expect-response?")]
+                           (exp-fn qbuf)
+                           true)
+        sbuf
+        (try
+	  (let [sock (java.net.Socket. (-> server :host) (-> server :port))
+		in (-> sock .getInputStream)
+		out (-> sock .getOutputStream)]
+	    (.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
+	    (.writeTo qbuf out)
+     
+	    (if expect-response?
+	      (let [ba ((connector-fn "/read-response") in)]
+		(if (not= -1 ba)
+		  (let [sbuf (java.io.ByteArrayOutputStream. (count ba))]
+		    (-> sbuf (.write ba 0 (count ba)))
+		    sbuf)
+		  (java.io.ByteArrayOutputStream. 0)))
+              (java.io.ByteArrayOutputStream. 0)))
+	      
+	  (catch java.net.SocketTimeoutException e
+	    (println (format "%s:%d: %s"
+			     (-> server :host)
+			     (-> server :port)
+			     (.getMessage e)))
+	    (java.io.ByteArrayOutputStream. 0))
+	  (catch java.net.ConnectException e
+	    (println (format "%s:%d: %s"
+			     (-> server :host)
+			     (-> server :port)
+			     (.getMessage e)))
+	      (java.io.ByteArrayOutputStream. 0)))]
+      {:buffer sbuf :server server}))
 
-(defn intercept
-  [qbuf]
-  (let [responses (pmap
-                    #(prox % qbuf)
-                    (-> props :servers))
-        primary (first
-                  (filter
-                    #(= (:primary (second %)) true)
-                    (map-indexed vector (-> props :servers))))]
+  (defn intercept
+    [qbuf]
+    (let [responses (pmap
+		      #(prox % qbuf)
+		      (-> props :servers))
+	  primary (first
+		    (filter
+		      #(= (:primary (second %)) true)
+		      (map-indexed vector (-> props :servers))))]
 
-    (let [connector (-> props :connector)]
       (let [pkg {:responses responses
                  :request qbuf
                  :props props}]
-        ((resolve (symbol (str connector "/handle-interchange"))) pkg)))
-    
-    (if primary
-      (:buffer (nth responses (first primary)))
-      (:buffer (first responses)))))
+        ((connector-fn "/handle-interchange") pkg))
+      
+      (if primary
+        (:buffer (nth responses (first primary)))
+        (:buffer (first responses)))))
 
-(defn handle-connection
-  [conn]
-  (loop []
-    (let [ba ((resolve (symbol (str (-> props :connector) "/read-request")))
-               (:in @conn))]
-      (if (not= -1 ba)
+  (defn handle-connection
+    [conn]
+    (loop []
+      (let [ba ((connector-fn "/read-request") (:in @conn))]
+	(if (not= -1 ba)
         (let [qbuf (java.io.ByteArrayOutputStream. (count ba))]
           (-> qbuf (.write ba 0 (count ba)))
-          (let [sbuf (-> qbuf intercept)]
-            (.writeTo sbuf (:out @conn)))
+	  (.writeTo (-> qbuf intercept) (:out @conn))
           (recur))
         (println "connection closed")))))
 
