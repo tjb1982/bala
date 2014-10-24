@@ -48,9 +48,10 @@
 
   (defn intercept
     [qbuf]
-    (let [responses (pmap
-		      #(prox % qbuf)
-		      (-> props :servers))
+    (let [responses (let [m (if (= (props :sync) true) map pmap)]
+                      (m
+                        #(prox % qbuf)
+                        (-> props :servers)))
 	  primary (first
 		    (filter
 		      #(= (:primary (second %)) true)
