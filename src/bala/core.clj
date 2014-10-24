@@ -46,42 +46,45 @@
 	      (java.io.ByteArrayOutputStream. 0)))]
       {:buffer sbuf :server server}))
 
-  (defn intercept
-    [qbuf]
-    (let [responses (let [m (if (= (props :sync) true) map pmap)]
-                      (m
-                        #(prox % qbuf)
-                        (-> props :servers)))
-	  primary (first
-		    (filter
-		      #(= (:primary (second %)) true)
-		      (map-indexed vector (-> props :servers))))]
+(defn intercept
+  [qbuf]
+  (let [responses (let [m (if (= (props :sync) true) map pmap)]
+                    (m
+                      #(prox % qbuf)
+                      (-> props :servers)))
+        primary (first
+      	    (filter
+      	      #(= (:primary (second %)) true)
+      	      (map-indexed vector (-> props :servers))))]
 
-      (let [pkg {:responses responses
-                 :request qbuf
-                 :props props}]
-        ((connector-fn "/handle-interchange") pkg))
-      
-      (if primary
-        (:buffer (nth responses (first primary)))
-        (:buffer (first responses)))))
+    (let [pkg {:responses responses
+               :request qbuf
+               :props props}]
+      ((connector-fn "/handle-interchange") pkg))
+    
+    (if primary
+      (:buffer (nth responses (first primary)))
+      (:buffer (first responses)))))
 
-  (defn handle-connection
-    [conn]
-    (loop []
-      (let [ba ((connector-fn "/read-request") (:in @conn))]
-	(if (not= -1 ba)
-        (let [qbuf (java.io.ByteArrayOutputStream. (count ba))]
-          (-> qbuf (.write ba 0 (count ba)))
-	  (.writeTo (-> qbuf intercept) (:out @conn))
-          (recur))
-        (println "connection closed")))))
+(def c (atom 0))
+
+(defn handle-connection
+  [conn]
+  (println "new connection:" (swap! c inc))
+  (loop []
+    (let [ba ((connector-fn "/read-request") (:in @conn))]
+      (if (not= -1 ba)
+      (let [qbuf (java.io.ByteArrayOutputStream. (count ba))]
+        (-> qbuf (.write ba 0 (count ba)))
+        (.writeTo (-> qbuf intercept) (:out @conn))
+        (recur))
+      (println "connection closed:" @(:id @conn))))))
 
 (defn handle-thread
   [in out]
   (when-let [pre-fn (connector-fn "/before-connection")]
     (pre-fn props))
-  (let [conn (ref {:in in :out out})]
+  (let [conn (ref {:in in :out out :id c})]
     (handle-connection conn))
   (when-let [post-fn (connector-fn "/after-connection")]
     (post-fn props)))
