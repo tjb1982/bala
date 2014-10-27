@@ -1,14 +1,21 @@
 (ns bala.core
   (:require [server.socket :as ss]
+            [clojure.pprint :as pprint]
             [clj-yaml.core :as yaml])
   (:gen-class))
 
 (def buffer-size 8192)
 (def ^:dynamic props nil)
+(def c (atom 0))
+(def ^:dynamic servers nil)
 
 (defn connector-fn
   [fn-name]
   (resolve (symbol (str (-> props :connector) fn-name))))
+
+(defn print-server-exception
+  [server e]
+  (println (format "%s:%d: %s" (:host server) (:port server) (.getMessage e))))
 
 (defn prox
   [server qbuf]
@@ -17,7 +24,9 @@
                            true)
         sbuf
         (try
-	  (let [sock (java.net.Socket. (-> server :host) (-> server :port))
+	  (let [sock (if (:isolate-requests server)
+                           (java.net.Socket. (-> server :host) (-> server :port))
+                           (:sock server))
 		in (-> sock .getInputStream)
 		out (-> sock .getOutputStream)]
 	    (.setSoTimeout sock (or (-> server :timeout) (-> props :server-timeout) 0))
@@ -31,19 +40,15 @@
 		    sbuf)
 		  (java.io.ByteArrayOutputStream. 0)))
               (java.io.ByteArrayOutputStream. 0)))
-	      
+	  (catch java.net.NoRouteToHostException e
+            (print-server-exception server e)
+	    (java.io.ByteArrayOutputStream. 0))
 	  (catch java.net.SocketTimeoutException e
-	    (println (format "%s:%d: %s"
-			     (-> server :host)
-			     (-> server :port)
-			     (.getMessage e)))
+            (print-server-exception server e)
 	    (java.io.ByteArrayOutputStream. 0))
 	  (catch java.net.ConnectException e
-	    (println (format "%s:%d: %s"
-			     (-> server :host)
-			     (-> server :port)
-			     (.getMessage e)))
-	      (java.io.ByteArrayOutputStream. 0)))]
+            (print-server-exception server e)
+	    (java.io.ByteArrayOutputStream. 0)))]
       {:buffer sbuf :server server}))
 
 (defn intercept
@@ -51,11 +56,11 @@
   (let [responses (let [m (if (= (props :sync) true) map pmap)]
                     (m
                       #(prox % qbuf)
-                      (-> props :servers)))
+                      servers))
         primary (first
       	    (filter
       	      #(= (:primary (second %)) true)
-      	      (map-indexed vector (-> props :servers))))]
+      	      (map-indexed vector servers)))]
 
     (let [pkg {:responses responses
                :request qbuf
@@ -66,7 +71,6 @@
       (:buffer (nth responses (first primary)))
       (:buffer (first responses)))))
 
-(def c (atom 0))
 
 (defn handle-connection
   [conn]
@@ -95,9 +99,18 @@
     (do
       (alter-var-root #'props
                       (fn [_] (yaml/parse-string (slurp properties-file))))
-      (require (symbol (-> props :connector)))
+      (alter-var-root #'servers
+                      (fn [_] (map
+                                (fn [server]
+                                  (let [sock (java.net.Socket. (:host server) (:port server))]
+                                    (assoc server 
+                                      :sock sock)))
+                                (:servers props))))
+      (println "Configured for:") (pprint/pprint servers)
+      (require (symbol (:connector props)))
+      (println "Using connector module:" (:connector props))
       (when-let [pre-server-fn (connector-fn "/before-create-server")]
         (pre-server-fn props))
-      (ss/create-server (-> props :proxy-port) handle-thread))
+      (ss/create-server (-> props :proxy-port) handle-thread 20))
     (println "usage: [main] /path/to/config/file")))
 

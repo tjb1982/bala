@@ -1,4 +1,4 @@
-proxy-port: 8031
+proxy-port: 8031 
 
 #sync: true
 
@@ -12,7 +12,8 @@ servers:
 
 # - name: mongo v2.6
 #   host: localhost
-#   port: 27017
+#   port: 27017 
+   isolate-requests: true 
    primary: true
 
 server-timeout: 5000
